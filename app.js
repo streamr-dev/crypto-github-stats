@@ -1,12 +1,59 @@
 const StreamrClient = require('streamr-client');
-
-// Ahoy Hacker, fill in this!
-const STREAM_NAME = 'INSERT_STREAM_NAME_HERE';
+const GitHub = require('./github');
 
 const API_KEY = process.env.API_KEY
 if (API_KEY === undefined) {
   throw new Error('Must export environment variable API_KEY');
 }
+
+const POLLING_INTERVAL_IN_MS = 15 * 60 * 1000;
+const LOGGING_INTERVAL_IN_MS = 15 * 60 * 1000;
+
+const GITHUB_REPOSITORIES = [
+    {
+        org: 'bitcoin',
+        repo: 'bitcoin'
+    },
+    {
+        org: 'ethereum',
+        repo: 'go-ethereum'
+    },
+    {
+        org: 'ripple',
+        repo: 'rippled'
+    },
+    {
+        org: 'EOSIO',
+        repo: 'eos'
+    },
+    {
+        org: 'litecoin-project',
+        repo: 'litecoin'
+    },
+    {
+        org: 'input-output-hk',
+        repo: 'cardano-sl'
+    },
+    {
+        org: 'stellar',
+        repo: 'stellar-core'
+    },
+    {
+        org: 'iotaledger',
+        repo: 'iri'
+    },
+    {
+        org: 'tronprotocol',
+        repo: 'java-tron'
+    },
+    {
+        org: 'streamr-dev',
+        repo: 'engine-and-editor'
+    }
+];
+
+
+let messagesSent = 0;
 
 main().catch(console.error);
 
@@ -17,38 +64,55 @@ async function main() {
     });
 
     // Get a Stream (creates one if does not already exist)
-    const stream = await client.getOrCreateStream({
-        name: STREAM_NAME
-    });
-    console.info("Initialized stream:", stream.id);
+    GITHUB_REPOSITORIES.forEach(async (entry) => {
+        const stream = await client.getOrCreateStream({
+            name: `GitHub commits ${entry.org}/${entry.repo}`
+        });
 
-    // Generate and produce randomized data to Stream
-    await generateEventAndSend(stream, 0);
+        console.info("Starting listening for Stream", stream.name, stream.id);
+
+        await pollAndPush(entry.org, entry.repo, stream, new Date().toISOString());
+    })
+
+    // Start logging
+    setInterval(() => {
+        console.info(`${messagesSent} events sent.`);
+        messagesSent = 0;
+    }, LOGGING_INTERVAL_IN_MS);
 }
 
-async function generateEventAndSend(stream, i) {
-    const msg = {
-        messageNo: i,
-        someString: randomAlphanumericString(256),
-        temperature: Math.random() * 100 - 50,
-        hypeLevel: Math.random() * 100 - 50,
-        moonLevel: Math.random() * 100000 - 50,
-        isMoon: Math.random() > 0.5
-    };
+async function pollAndPush(org, repo, stream, since) {
+    while (true) {
+        const commits = await GitHub.fetchCommits(org, repo, since);
+        console.info(`${org}/${repo}: fetched commits`);
+        since = new Date().toISOString();
 
-    await stream.produce(msg);
-    console.info('Event sent:', msg);
+        if (commits.message) {
+            console.error(`${org}/${repo}:`, commits.message);
+        } else {
+            commits.forEach(async (commit) => {
+                const dataPoint = transformData(commit);
+                await stream.produce(dataPoint);
+                messagesSent += 1;
+            });
+        }
 
-    // Send next package in 3 seconds
-    setTimeout(generateEventAndSend.bind(null, stream, i + 1), 3 * 1000);
-}
-
-function randomAlphanumericString(len) {
-    let charSet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let randomString = '';
-    for (let i = 0; i < len; i++) {
-        let randomPoz = Math.floor(Math.random() * charSet.length);
-        randomString += charSet.substring(randomPoz,randomPoz+1);
+        await timeout(POLLING_INTERVAL_IN_MS);
     }
-    return randomString;
+}
+
+function transformData(commit) {
+    return {
+        sha: commit.sha,
+        message: commit.commit.message,
+        commitedAt: commit.commit.committer.date,
+        author: commit.commit.author.name,
+        committer: commit.commit.committer.name
+    };
+}
+
+function timeout(delay) {
+    return new Promise(done => {
+        setTimeout(done, delay);
+    });
 }
